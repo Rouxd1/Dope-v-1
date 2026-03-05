@@ -1,14 +1,15 @@
-// Entry point for Dope Farm PvP hotseat demo.
-// Update: Store now BUYS seed UNITS (cash cost) and planting consumes seeds (energy only).
-// Harvest produces goods; Store sells goods into cash.
-
+// ui/main.js
 import { GameState } from "../sim/GameState.js";
+import { createInputRouter } from "./InputRouter.js";
 
 let uiConfig = { turnTime: 45 };
 
 let game;
 let timerId = null;
 let remainingTime;
+let inputRouter = null;
+
+let inputEnabled = false; // gated by overlay + menus
 
 // DOM references
 const gridEl = document.getElementById("grid");
@@ -41,7 +42,26 @@ async function init() {
   remainingTime = uiConfig.turnTime;
 
   buildGrid();
+  setupInputRouter();
+
   showOverlayForPlayer(game.currentPlayerIndex);
+}
+
+function setupInputRouter() {
+  if (inputRouter) inputRouter.destroy();
+
+  inputRouter = createInputRouter({
+    gridEl,
+    onMove: (dx, dy) => performMove(dx, dy),
+    onInteract: () => performInteract(),
+    onSwap: () => performSwap(),
+    onEndTurn: () => endCurrentPlayerTurn(),
+    isInputEnabled: () => inputEnabled,
+  });
+}
+
+function setInputEnabled(v) {
+  inputEnabled = v;
 }
 
 function buildGrid() {
@@ -80,24 +100,12 @@ function render() {
           else if (cell.ownerTeam === 1) cellDiv.classList.add("farmland1");
           else cellDiv.classList.add("neutral");
           break;
-        case "lake":
-          cellDiv.classList.add("lake");
-          break;
-        case "bank":
-          cellDiv.classList.add("bank");
-          break;
-        case "store":
-          cellDiv.classList.add("store");
-          break;
-        case "farmhouse0":
-          cellDiv.classList.add("farmhouse0");
-          break;
-        case "farmhouse1":
-          cellDiv.classList.add("farmhouse1");
-          break;
-        case "thorns":
-          cellDiv.classList.add("thorns");
-          break;
+        case "lake": cellDiv.classList.add("lake"); break;
+        case "bank": cellDiv.classList.add("bank"); break;
+        case "store": cellDiv.classList.add("store"); break;
+        case "farmhouse0": cellDiv.classList.add("farmhouse0"); break;
+        case "farmhouse1": cellDiv.classList.add("farmhouse1"); break;
+        case "thorns": cellDiv.classList.add("thorns"); break;
       }
 
       if (cell.crop) {
@@ -117,7 +125,6 @@ function render() {
           cropDiv.textContent = `${letter}${crop.stage + 1}`;
           if (crop.rotPenalty > 0) cropDiv.classList.add("rot");
         }
-
         cellDiv.appendChild(cropDiv);
       }
     }
@@ -164,6 +171,8 @@ function showOverlayForPlayer(playerIndex) {
   overlayEl.classList.remove("hidden");
   actionTrayEl.classList.add("hidden");
 
+  setInputEnabled(false);
+
   if (timerId) {
     clearInterval(timerId);
     timerId = null;
@@ -176,6 +185,7 @@ function startTurn() {
   startTimer();
   renderActionTray();
   render();
+  setInputEnabled(true);
 }
 
 function startTimer() {
@@ -203,14 +213,12 @@ function renderActionTray() {
     return btn;
   }
 
-  const moveUp = createButton("↑", () => performMove(0, -1));
-  const moveDown = createButton("↓", () => performMove(0, 1));
-  const moveLeft = createButton("←", () => performMove(-1, 0));
-  const moveRight = createButton("→", () => performMove(1, 0));
+  // Mobile-first minimal tray
+  const swapBtn = createButton("Swap", () => performSwap());
   const interactBtn = createButton("Interact", () => performInteract());
   const endBtn = createButton("End Turn", () => endCurrentPlayerTurn());
 
-  actionTrayEl.append(moveUp, moveLeft, moveRight, moveDown, interactBtn, endBtn);
+  actionTrayEl.append(swapBtn, interactBtn, endBtn);
   actionTrayEl.classList.remove("hidden");
   updateActionButtons();
 }
@@ -220,6 +228,7 @@ function updateActionButtons() {
   const buttons = actionTrayEl.querySelectorAll("button");
   buttons.forEach((btn) => (btn.disabled = false));
 
+  // If no energy: disable swap/interact, keep end turn
   if (p.energy <= 0) {
     buttons.forEach((btn) => {
       if (btn.textContent !== "End Turn") btn.disabled = true;
@@ -228,6 +237,8 @@ function updateActionButtons() {
 }
 
 function performMove(dx, dy) {
+  if (!inputEnabled) return;
+
   const p = game.players[game.currentPlayerIndex];
   const result = game.movePlayer(p, dx, dy);
   if (result.success) render();
@@ -237,6 +248,8 @@ function performMove(dx, dy) {
 }
 
 function performInteract() {
+  if (!inputEnabled) return;
+
   const p = game.players[game.currentPlayerIndex];
   const result = game.interact(p);
 
@@ -249,9 +262,23 @@ function performInteract() {
   if (p.energy <= 0) endCurrentPlayerTurn();
 }
 
+function performSwap() {
+  if (!inputEnabled) return;
+
+  // Stub for upcoming “two hands” system:
+  // For now, swap just cycles activeSeed between wheat -> mj_cheap -> mj_premium
+  const p = game.players[game.currentPlayerIndex];
+  const order = ["wheat", "mj_cheap", "mj_premium"];
+  const idx = order.indexOf(p.activeSeed);
+  p.activeSeed = order[(idx + 1 + order.length) % order.length];
+  render();
+}
+
 function endCurrentPlayerTurn() {
   closeStore();
   closeBank();
+
+  setInputEnabled(false);
 
   if (timerId) {
     clearInterval(timerId);
@@ -267,10 +294,11 @@ function endCurrentPlayerTurn() {
 /* ---------------- Store UI (Buy Seeds + Sell Goods) ---------------- */
 
 function openStore() {
+  setInputEnabled(false); // prevent swipes moving while in menus
+
   const p = game.players[game.currentPlayerIndex];
   storeContentEl.innerHTML = "";
 
-  // BUY SEEDS
   const buyHeader = document.createElement("h4");
   buyHeader.textContent = "Buy Seeds";
   storeContentEl.appendChild(buyHeader);
@@ -326,7 +354,6 @@ function openStore() {
     storeContentEl.appendChild(row);
   });
 
-  // SELL GOODS
   const sellHeader = document.createElement("h4");
   sellHeader.style.marginTop = "10px";
   sellHeader.textContent = "Sell";
@@ -371,7 +398,6 @@ function openStore() {
 
   storeUiEl.classList.remove("hidden");
 
-  // pause timer in store
   if (timerId) {
     clearInterval(timerId);
     timerId = null;
@@ -382,6 +408,7 @@ function closeStore() {
   if (!storeUiEl.classList.contains("hidden")) {
     storeUiEl.classList.add("hidden");
     startTimer();
+    setInputEnabled(true);
   }
 }
 closeStoreBtn.addEventListener("click", closeStore);
@@ -389,6 +416,8 @@ closeStoreBtn.addEventListener("click", closeStore);
 /* ---------------- Bank UI ---------------- */
 
 function openBank() {
+  setInputEnabled(false);
+
   const p = game.players[game.currentPlayerIndex];
   bankContentEl.innerHTML = "";
 
@@ -432,6 +461,7 @@ function closeBank() {
   if (!bankUiEl.classList.contains("hidden")) {
     bankUiEl.classList.add("hidden");
     startTimer();
+    setInputEnabled(true);
   }
 }
 closeBankBtn.addEventListener("click", closeBank);
